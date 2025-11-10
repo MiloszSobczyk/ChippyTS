@@ -1,35 +1,38 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from '/vite.svg'
-import './App.css'
+import { useEffect, useRef, useState } from "react";
+import { Chip8 } from "@core/Chip8";
+import EmulatorCanvas from "@components/EmulatorCanvas";
 
-function App() {
-  const [count, setCount] = useState(0)
+export default function App() {
+  const chip8Ref = useRef<Chip8 | null>(null);
+  const [screen, setScreen] = useState<Uint8Array>(new Uint8Array(64 * 32));
+  const [running, setRunning] = useState(false);
+
+  useEffect(() => {
+    const chip8 = new Chip8();
+    chip8.SetDrawCallback((gfx) => setScreen(gfx));
+    chip8Ref.current = chip8;
+
+    fetch("/roms/pong2.ch8")
+      .then((res) => res.arrayBuffer())
+      .then((buf) => chip8.LoadProgram(new Uint8Array(buf)));
+  }, []);
+
+  useEffect(() => {
+    let frame: number;
+    function loop() {
+      if (running && chip8Ref.current) {
+        chip8Ref.current.RunFrame(10);
+      }
+      frame = requestAnimationFrame(loop);
+    }
+    frame = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(frame);
+  }, [running]);
 
   return (
-    <>
-      <div>
-        <a href="https://vite.dev" target="_blank">
-          <img src={viteLogo} className="logo" alt="Vite logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <h1>Vite + React</h1>
-      <div className="card">
-        <button onClick={() => setCount((count) => count + 1)}>
-          count is {count}
-        </button>
-        <p>
-          Edit <code>src/App.tsx</code> and save to test HMR
-        </p>
-      </div>
-      <p className="read-the-docs">
-        Click on the Vite and React logos to learn more
-      </p>
-    </>
-  )
+    <div>
+      <EmulatorCanvas screen={screen} />
+      <button onClick={() => setRunning(!running)}>{running ? "Pause" : "Start"}</button>
+    </div>
+  );
 }
-
-export default App
