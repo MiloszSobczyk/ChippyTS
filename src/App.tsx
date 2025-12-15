@@ -12,7 +12,7 @@ export default function App() {
     chip8.SetDrawCallback((gfx) => setScreen(gfx));
     chip8Ref.current = chip8;
 
-    fetch("/roms/pong2.ch8")
+    fetch("/roms/Tetris.ch8")
       .then((res) => res.arrayBuffer())
       .then((buf) => chip8.LoadProgram(new Uint8Array(buf)));
   }, []);

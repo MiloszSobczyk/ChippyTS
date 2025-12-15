@@ -27,6 +27,7 @@ export class Chip8 {
   private sp: number;
 
   // Keypad state (16 keys)
+  // Not working yet
   private key: Uint8Array;
 
   // Draw flag
@@ -120,7 +121,6 @@ export class Chip8 {
     0x80, // F
   ]);
 
-  // Display dimensions
   public readonly width: number = 64;
   public readonly height: number = 32;
 
@@ -128,7 +128,7 @@ export class Chip8 {
     this.memory = new Uint8Array(4096);
     this.V = new Uint8Array(16);
     this.I = 0;
-    this.pc = 0x200; // Programs start at 0x200
+    this.pc = 0x200;
     this.gfx = new Uint8Array(this.width * this.height);
     this.delayTimer = 0;
     this.soundTimer = 0;
@@ -187,23 +187,17 @@ export class Chip8 {
     this.key[index] = pressed ? 1 : 0;
   }
 
-  // Return copy of the Chip8 display buffer
   public GetScreen(): Uint8Array<ArrayBuffer> {
     return this.gfx.slice();
   }
 
-  // One CPU cycle: fetch, decode, execute
   public Cycle(): void {
-    // Fetch opcode (two bytes)
     const opcode: number = (this.memory[this.pc] << 8) | this.memory[this.pc + 1];
 
-    // Increment pc before we may modify it during some instructions
     this.pc += 2;
 
-    // Decode and execute (missing ExecuteOpcode implementation)
     this.ExecuteOpcode(opcode);
 
-    // Update timers
     if (this.delayTimer > 0) {
       this.delayTimer -= 1;
     }
@@ -219,10 +213,303 @@ export class Chip8 {
     }
   }
 
-  private ExecuteOpcode(opcode: number): void {}
+  private ExecuteOpcode(opcode: number) {
+    const nibbles = [
+      (opcode & 0xf000) >> 12,
+      (opcode & 0x0f00) >> 8,
+      (opcode & 0x00f0) >> 4,
+      opcode & 0x000f,
+    ];
+
+    const nnn = opcode & 0x0fff;
+    const kk = opcode & 0x00ff;
+    const x = nibbles[1]; // first register index
+    const y = nibbles[2]; // second register index
+    const n = nibbles[3]; // additional extra value, e.g. sprite height
+
+    // nibbles[0] - instruction category
+    switch (nibbles[0]) {
+      case 0x0:
+        if (opcode === 0x00e0) {
+          // CLS - clear the display
+          this.gfx.fill(0);
+          this.drawFlag = true;
+          if (this.onDraw) {
+            this.onDraw(this.GetScreen(), this.width, this.height);
+          }
+        } else if (opcode === 0x00ee) {
+          // RET - return from subroutine
+          this.sp -= 1;
+          this.pc = this.stack[this.sp];
+        } else {
+          // 0nnn - SYS addr (ignored)
+        }
+
+        break;
+
+      case 0x1:
+        // JP addr
+        this.pc = nnn;
+        break;
+
+      case 0x2:
+        // CALL addr
+        this.stack[this.sp] = this.pc;
+        this.sp += 1;
+        this.pc = nnn;
+        break;
+
+      case 0x3:
+        // SE Vx, byte
+        if (this.V[x] === kk) {
+          this.pc += 2;
+        }
+
+        break;
+
+      case 0x4:
+        // SNE Vx, byte
+        if (this.V[x] !== kk) {
+          this.pc += 2;
+        }
+
+        break;
+
+      case 0x5:
+        // SE Vx, Vy
+        if (this.V[x] === this.V[y]) {
+          this.pc += 2;
+        }
+
+        break;
+
+      case 0x6:
+        // LD Vx, byte
+        this.V[x] = kk;
+        break;
+
+      case 0x7:
+        // ADD Vx, byte
+        this.V[x] = (this.V[x] + kk) & 0xff;
+        break;
+
+      case 0x8:
+        switch (n) {
+          case 0x0:
+            // LD Vx, Vy
+            this.V[x] = this.V[y];
+            break;
+
+          case 0x1:
+            // OR Vx, Vy
+            this.V[x] |= this.V[y];
+            break;
+
+          case 0x2:
+            // AND Vx, Vy
+            this.V[x] &= this.V[y];
+            break;
+
+          case 0x3:
+            // XOR Vx, Vy
+            this.V[x] ^= this.V[y];
+            break;
+
+          case 0x4:
+            // ADD Vx, Vy (set VF when carry)
+            const sum = this.V[x] + this.V[y];
+            this.V[0xf] = sum > 0xff ? 1 : 0;
+            this.V[x] = sum & 0xff;
+            break;
+
+          case 0x5:
+            // SUB Vx, Vy (VF = NOT borrow)
+            this.V[0xf] = this.V[x] > this.V[y] ? 1 : 0;
+            this.V[x] = (this.V[x] - this.V[y]) & 0xff;
+            break;
+
+          case 0x6:
+            // SHR Vx {, Vy}
+            this.V[0xf] = this.V[x] & 0x1;
+            this.V[x] = this.V[x] >> 1;
+            break;
+
+          case 0x7:
+            // SUBN Vx, Vy (VF = NOT borrow)
+            this.V[0xf] = this.V[y] > this.V[x] ? 1 : 0;
+            this.V[x] = (this.V[y] - this.V[x]) & 0xff;
+            break;
+
+          case 0xe:
+            // SHL Vx {, Vy}
+            this.V[0xf] = (this.V[x] & 0x80) >> 7;
+            this.V[x] = (this.V[x] << 1) & 0xff;
+            break;
+
+          default:
+            // Unknown
+            break;
+        }
+
+        break;
+
+      case 0x9:
+        // SNE Vx, Vy
+        if (this.V[x] !== this.V[y]) {
+          this.pc += 2;
+        }
+
+        break;
+
+      case 0xa:
+        // LD I, addr
+        this.I = nnn;
+        break;
+
+      case 0xb:
+        // JP V0, addr
+        this.pc = nnn + this.V[0];
+        break;
+
+      case 0xc:
+        // RND Vx, byte
+        this.V[x] = Math.floor(Math.random() * 0xff) & kk & 0xff;
+        break;
+
+      case 0xd:
+        // DRW Vx, Vy, nibble - draw sprite
+        this.V[0xf] = 0;
+        const vx = this.V[x];
+        const vy = this.V[y];
+        const height = n;
+
+        for (let row = 0; row < height; row++) {
+          const spriteByte = this.memory[this.I + row];
+
+          for (let bit = 0; bit < 8; bit++) {
+            const px = (vx + bit) % this.width;
+            const py = (vy + row) % this.height;
+            const pixelIndex = px + py * this.width;
+            const spritePixel = (spriteByte >> (7 - bit)) & 0x1;
+
+            if (spritePixel === 1) {
+              if (this.gfx[pixelIndex] === 1) {
+                this.V[0xf] = 1;
+              }
+
+              this.gfx[pixelIndex] ^= 1;
+            }
+          }
+        }
+
+        this.drawFlag = true;
+
+        if (this.onDraw) {
+          this.onDraw(this.GetScreen(), this.width, this.height);
+        }
+
+        break;
+
+      case 0xe:
+        if (kk === 0x9e) {
+          // SKP Vx
+          if (this.key[this.V[x]] === 1) {
+            this.pc += 2;
+          }
+        } else if (kk === 0xa1) {
+          // SKNP Vx
+          if (this.key[this.V[x]] === 0) {
+            this.pc += 2;
+          }
+        }
+
+        break;
+
+      case 0xf:
+        switch (kk) {
+          case 0x07:
+            // LD Vx, DT
+            this.V[x] = this.delayTimer;
+            break;
+
+          case 0x0a:
+            // LD Vx, K - wait for key press
+            {
+              let keyPressed = false;
+
+              for (let i = 0; i < 16; i++) {
+                if (this.key[i] === 1) {
+                  this.V[x] = i;
+                  keyPressed = true;
+                  break;
+                }
+              }
+
+              if (!keyPressed) {
+                // Repeat this instruction by moving PC back 2
+                this.pc -= 2;
+              }
+            }
+
+            break;
+
+          case 0x15:
+            // LD DT, Vx
+            this.delayTimer = this.V[x];
+            break;
+
+          case 0x18:
+            // LD ST, Vx
+            this.soundTimer = this.V[x];
+            break;
+
+          case 0x1e:
+            // ADD I, Vx
+            this.I = (this.I + this.V[x]) & 0xffff;
+            break;
+
+          case 0x29:
+            // LD F, Vx - set I to location of sprite for digit Vx
+            this.I = 0x50 + this.V[x] * 5;
+            break;
+
+          case 0x33:
+            // LD B, Vx - store BCD representation of Vx in memory I, I+1, I+2
+            this.memory[this.I] = Math.floor(this.V[x] / 100);
+            this.memory[this.I + 1] = Math.floor((this.V[x] % 100) / 10);
+            this.memory[this.I + 2] = this.V[x] % 10;
+            break;
+
+          case 0x55:
+            // LD [I], Vx - store V0..Vx in memory starting at I
+            for (let i = 0; i <= x; i++) {
+              this.memory[this.I + i] = this.V[i];
+            }
+
+            break;
+
+          case 0x65:
+            // LD Vx, [I] - read V0..Vx from memory starting at I
+            for (let i = 0; i <= x; i++) {
+              this.V[i] = this.memory[this.I + i];
+            }
+
+            break;
+
+          default:
+            // Unknown
+            break;
+        }
+
+        break;
+
+      default:
+        // Unknown opcode
+        break;
+    }
+  }
 
   // Helpers to run many cycles per frame and update timers at ~60Hz
-  // call runFrame(cycles) from your main loop where cycles is e.g. 10..20 depending on speed
   public RunFrame(cycles: number) {
     for (let i = 0; i < cycles; i++) {
       this.Cycle();
